@@ -200,14 +200,18 @@ norm_stats = ((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
 # If there is a device, take the first else use the CPU
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+import torch
+import torch.nn as nn
+
 class Classifier(nn.Module):
     def __init__(self, in_features):
         super(Classifier, self).__init__()
         self.fc = nn.Linear(in_features, 1)
     
     def forward(self, x):
-        x = torch.flatten(x, 1)
-        return self.fc(x)
+        x = self.fc(x)        # Pass through the linear layer
+        x = torch.sigmoid(x)  # Apply sigmoid activation
+        return x
 
 class AttentionPooling(nn.Module):
     def __init__(self, feature_dim, hidden_dim=128):
@@ -371,92 +375,81 @@ def apply_backdoor_adjustment(bag_features, confounder_centroids, alpha=0.1):
 # The number of confounders
 num_clusters = 8
 
-all_bag_features = []
-print('Loading the confounders...')
-with torch.no_grad():
-    for batch_idx, (data, target) in enumerate(tqdm(trainloader)):
-        data = torch.stack([image for image in data]).squeeze(1)
-        data = data.to(device)
+# all_bag_features = []
+# print('Loading the confounders...')
+# with torch.no_grad():
+#     for batch_idx, (data, target) in enumerate(tqdm(trainloader)):
+#         data = torch.stack([image for image in data]).squeeze(1)
+#         data = data.to(device)
 
-        # Feature extraction for instances in the bag
-        instance_features = feature_extractor(data)
+#         # Feature extraction for instances in the bag
+#         instance_features = feature_extractor(data)
   
-        # Aggregate instance features (mean-pooling or max-pooling)
-        bag_features = instance_features.mean(dim=0)
+#         # Aggregate instance features (mean-pooling or max-pooling)
+#         bag_features = instance_features.mean(dim=0)
 
-        # Store the bag-level feature representation
-        all_bag_features.append(bag_features.cpu().numpy())
+#         # Store the bag-level feature representation
+#         all_bag_features.append(bag_features.cpu().numpy())
 
-all_bag_features = np.array(all_bag_features)
-all_bag_features = all_bag_features.squeeze(2).squeeze(2)
-kmeans = KMeans(n_clusters=num_clusters, random_state=0).fit(all_bag_features)
-confounder_centroids = kmeans.cluster_centers_ 
+# all_bag_features = np.array(all_bag_features)
+# all_bag_features = all_bag_features.squeeze(2).squeeze(2)
+# kmeans = KMeans(n_clusters=num_clusters, random_state=0).fit(all_bag_features)
+# confounder_centroids = kmeans.cluster_centers_ 
 
 for epoch in range(num_epochs):
-    classifier.train()  # Set model to training mode
-    train_loss = 0.0
-    train_acc = 0.0
-    
-    # Training loop
-    print(f"Training for epoch {epoch}...")
+    classifier.train()
+    train_loss, train_acc = 0.0, 0.0
+
     for batch_idx, (data, target) in enumerate(tqdm(trainloader)):
         data = torch.stack([image for image in data]).squeeze(1)  # Prepare input
-        data, target = data.to(device), target.to(device)
-        
+        target = target.float().to(device)  # Ensure target is float and on the right device
+
         optimizer.zero_grad()
-        
-        # Feature extraction and classification
         instance_features = feature_extractor(data)
-        # bag_features = instance_features.mean(dim=0).squeeze(1).T  # mean pooling
+        instance_features = instance_features.squeeze(2).squeeze(2)
         bag_features = attention_pooling(instance_features)
-        adjusted_features = apply_backdoor_adjustment(bag_features, confounder_centroids, 0.001)
-        output = classifier(adjusted_features)
+        output = classifier(bag_features)
         
-        # Calculate loss and backpropagate
         loss = criterion(output, target)
         loss.backward()
         optimizer.step()
-        
-        # Track training loss and accuracy
+
         train_loss += loss.item()
-        train_acc += accuracy_score(output.cpu().argmax(dim=1), target.cpu())
-    
-    # Calculate average training loss and accuracy
+        predictions = (output > 0.5).long()
+        train_acc += accuracy_score(predictions.cpu(), target.cpu())
+
     train_loss /= len(trainloader)
     train_acc /= len(trainloader)
     
     # Validation loop
     classifier.eval()  # Set model to evaluation mode
-    val_loss = 0.0
-    val_acc = 0.0
-    
-    print(f"Testing for epoch {epoch}...")
-    with torch.no_grad():  # Disable gradient computation for validation
-        for batch_idx, (data, target) in enumerate(tqdm(testloader)):
-            data = torch.stack([image for image in data]).squeeze(1)  # Prepare input
-            data, target = data.to(device), target.to(device)
-            
-            # Feature extraction and classification
-            features = feature_extractor(data)
-            output = classifier(features)
-            
-            # Calculate validation loss
-            loss = criterion(output, target)
-            val_loss += loss.item()
-            
-            # Track validation accuracy
-            val_acc += accuracy_score(output.cpu().argmax(dim=1), target.cpu())
-    
-    # Calculate average validation loss and accuracy
-    val_loss /= len(testloader)
-    val_acc /= len(testloader)
-    
-    all_accs.append(val_acc)
+val_loss = 0.0
+val_acc = 0.0
 
-    # Learning rate scheduler step based on validation loss
-    scheduler.step(val_loss)
-    
-    # Print epoch summary
-    print(f'Epoch: {epoch} \tTrain Loss: {train_loss:.4f} \tTrain Acc: {train_acc:.4f} \tVal Loss: {val_loss:.4f} \tVal Acc: {val_acc:.4f}')
+print(f"Testing for epoch {epoch}...")
+with torch.no_grad():  # Disable gradient computation for validation
+    for batch_idx, (data, target) in enumerate(tqdm(testloader)):
+        data = torch.stack([image for image in data]).squeeze(1)  # Prepare input
+        data, target = data.to(device), target.to(device)
+        
+        # Feature extraction and classification
+        features = feature_extractor(data)
+        features = features.squeeze(2).squeeze(2)  # Adjust dimensions if needed
+        output = classifier(features)
+        
+        # Calculate validation loss
+        loss = criterion(output, target)
+        val_loss += loss.item()
+        
+        # Track validation accuracy
+        predictions = (output > 0.5).long()  # Threshold at 0.5 to get binary predictions
+        val_acc += accuracy_score(predictions.cpu(), target.cpu())
+
+# Calculate average validation loss and accuracy
+val_loss /= len(testloader)
+val_acc /= len(testloader)
+
+# Print validation summary for the epoch
+print(f'Validation Loss: {val_loss:.4f} \tValidation Acc: {val_acc:.4f}')
 
 print(all_accs)
