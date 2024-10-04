@@ -374,26 +374,26 @@ def apply_backdoor_adjustment(bag_features, confounder_centroids, alpha=0.1):
 # The number of confounders
 num_clusters = 8
 
-# all_bag_features = []
-# print('Loading the confounders...')
-# with torch.no_grad():
-#     for batch_idx, (data, target) in enumerate(tqdm(trainloader)):
-#         data = torch.stack([image for image in data]).squeeze(1)
-#         data = data.to(device)
+all_bag_features = []
+print('Loading the confounders...')
+with torch.no_grad():
+    for batch_idx, (data, target) in enumerate(tqdm(trainloader)):
+        data = torch.stack([image for image in data]).squeeze(1)
+        data = data.to(device)
 
-#         # Feature extraction for instances in the bag
-#         instance_features = feature_extractor(data)
+        # Feature extraction for instances in the bag
+        instance_features = feature_extractor(data)
   
-#         # Aggregate instance features (mean-pooling or max-pooling)
-#         bag_features = instance_features.mean(dim=0)
+        # Aggregate instance features (mean-pooling or max-pooling)
+        bag_features = instance_features.mean(dim=0)
 
-#         # Store the bag-level feature representation
-#         all_bag_features.append(bag_features.cpu().numpy())
+        # Store the bag-level feature representation
+        all_bag_features.append(bag_features.cpu().numpy())
 
-# all_bag_features = np.array(all_bag_features)
-# all_bag_features = all_bag_features.squeeze(2).squeeze(2)
-# kmeans = KMeans(n_clusters=num_clusters, random_state=0).fit(all_bag_features)
-# confounder_centroids = kmeans.cluster_centers_ 
+all_bag_features = np.array(all_bag_features)
+all_bag_features = all_bag_features.squeeze(2).squeeze(2)
+kmeans = KMeans(n_clusters=num_clusters, random_state=0).fit(all_bag_features)
+confounder_centroids = kmeans.cluster_centers_ 
 
 for epoch in range(num_epochs):
     classifier.train()
