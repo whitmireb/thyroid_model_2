@@ -461,7 +461,7 @@ for epoch in range(num_epochs):
             output = classifier(features)
 
             # Apply sigmoid to get probabilities between 0 and 1
-            predicted = torch.sigmoid(output)
+            predicted = torch.sigmoid(output.squeeze())
 
             # Store probabilities for AUC calculation
             all_probs.append(predicted.cpu().numpy()) 
