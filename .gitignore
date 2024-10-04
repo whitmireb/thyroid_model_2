@@ -1,0 +1,11 @@
+# Ignore all files
+*
+
+# Do not ignore the .gitignore file itself
+!.gitignore
+
+# Do not ignore the directory
+!folder/
+
+# Allow a specific file in the directory
+!folder/multi_instance_thyroid.py

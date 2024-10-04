@@ -37,7 +37,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from efficientnet_pytorch import EfficientNet
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, confusion_matrix, classification_report
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from sklearn.cluster import KMeans
@@ -209,9 +209,8 @@ class Classifier(nn.Module):
         self.fc = nn.Linear(in_features, 1)
     
     def forward(self, x):
-        x = self.fc(x)        # Pass through the linear layer
-        x = torch.sigmoid(x)  # Apply sigmoid activation
-        return x
+        # x = torch.flatten(x, 1)
+        return self.fc(x)
 
 class AttentionPooling(nn.Module):
     def __init__(self, feature_dim, hidden_dim=128):
@@ -270,7 +269,7 @@ all_accs = []
 
 '''This is where we can make alot of changes to test and see what works better'''
 # This is to define our standard loss function
-criterion = nn.BCELoss()
+criterion = torch.nn.BCEWithLogitsLoss()
 # Set up our learning rate with Adam
 optimizer = optim.Adam(classifier.parameters(), lr=1e-4, weight_decay=1e-4) #weight_decay=1e-4
 # Define some of our other factors, such as stoppage, patience, and verbose for the model
@@ -402,54 +401,112 @@ for epoch in range(num_epochs):
 
     for batch_idx, (data, target) in enumerate(tqdm(trainloader)):
         data = torch.stack([image for image in data]).squeeze(1)  # Prepare input
-        target = target.float().to(device)  # Ensure target is float and on the right device
-
+        data, target = data.to(device), target.to(device)
+        target = target.float()
+        
         optimizer.zero_grad()
         instance_features = feature_extractor(data)
         instance_features = instance_features.squeeze(2).squeeze(2)
+        # bag_features = instance_features.mean(dim=0).squeeze(1).T  # mean pooling
         bag_features = attention_pooling(instance_features)
-        output = classifier(bag_features)
-        
+        adjusted_features = apply_backdoor_adjustment(bag_features, confounder_centroids)
+        output = classifier(adjusted_features)
+
+        # Calculate loss and backpropagate
         loss = criterion(output, target)
         loss.backward()
         optimizer.step()
 
         train_loss += loss.item()
-        predictions = (output > 0.5).long()
-        train_acc += accuracy_score(predictions.cpu(), target.cpu())
+        # Apply sigmoid to get probabilities between 0 and 1
+        predicted = torch.sigmoid(output)  # Output should be logits from the model
 
+        # Convert probabilities to binary predictions (0 or 1) using 0.5 as the threshold
+        predicted = (predicted > 0.5).float()
+
+        # Calculate accuracy
+        train_acc += accuracy_score(predicted.cpu(), target.cpu())
+
+    
+    # Calculate average training loss and accuracy
     train_loss /= len(trainloader)
     train_acc /= len(trainloader)
     
     # Validation loop
     classifier.eval()  # Set model to evaluation mode
-val_loss = 0.0
-val_acc = 0.0
+    val_loss = 0.0
+    val_acc = 0.0
 
-print(f"Testing for epoch {epoch}...")
-with torch.no_grad():  # Disable gradient computation for validation
-    for batch_idx, (data, target) in enumerate(tqdm(testloader)):
-        data = torch.stack([image for image in data]).squeeze(1)  # Prepare input
-        data, target = data.to(device), target.to(device)
-        
-        # Feature extraction and classification
-        features = feature_extractor(data)
-        features = features.squeeze(2).squeeze(2)  # Adjust dimensions if needed
-        output = classifier(features)
-        
-        # Calculate validation loss
-        loss = criterion(output, target)
-        val_loss += loss.item()
-        
-        # Track validation accuracy
-        predictions = (output > 0.5).long()  # Threshold at 0.5 to get binary predictions
-        val_acc += accuracy_score(predictions.cpu(), target.cpu())
+    # Variables to store predictions and ground truths
+    all_preds = []
+    all_targets = []
+    all_probs = []
 
-# Calculate average validation loss and accuracy
-val_loss /= len(testloader)
-val_acc /= len(testloader)
+    val_correct = 0  # Track total correct predictions
+    val_total = 0    # Track total number of samples
+    
+    print(f"Testing for epoch {epoch}...")
+    with torch.no_grad():  # Disable gradient computation for validation
+        for batch_idx, (data, target) in enumerate(tqdm(testloader)):
+            data = torch.stack([image for image in data]).squeeze(1)  # Prepare input
+            data, target = data.to(device), target.to(device)
+            target = target.float()
+            
+            # Feature extraction and classification
+            features = feature_extractor(data)
+            features = features.squeeze(2).squeeze(2)
+            output = classifier(features)
 
-# Print validation summary for the epoch
-print(f'Validation Loss: {val_loss:.4f} \tValidation Acc: {val_acc:.4f}')
+            # Apply sigmoid to get probabilities between 0 and 1
+            predicted = torch.sigmoid(output.squeeze())
+
+            # Store probabilities for AUC calculation
+            all_probs.append(predicted.cpu().numpy()) 
+            # Convert probabilities to binary predictions (0 or 1)
+            predicted = (predicted > 0.5).float()
+
+            # Store predictions and targets for report/confusion matrix later
+            all_preds.append(predicted.cpu().numpy())
+            all_targets.append(target.cpu().numpy())
+
+            # Update total correct predictions
+            val_correct += (predicted.cpu() == target.cpu()).sum().item()
+            val_total += target.size(0)  # Number of samples in this batch
+
+            # Calculate validation loss
+            loss = criterion(output.squeeze(), target)
+            val_loss += loss.item()
+
+            # Track validation accuracy
+            val_acc += accuracy_score(predicted.cpu(), target.cpu())
+    
+   # Calculate overall validation accuracy
+    val_acc = val_correct / val_total
+
+    # Convert predictions and targets to numpy arrays for sklearn metrics
+    all_preds = np.concatenate(all_preds, axis=0)
+    all_targets = np.concatenate(all_targets, axis=0)
+    all_probs = np.concatenate(all_probs, axis=0)
+
+    # Compute misclassification count and accuracy
+    missed = (all_targets != all_preds).sum()
+    print(f'Misclassified examples: {missed}')
+    print(f"Accuracy: {100 * val_acc:.2f}%")
+    print(f"          {val_total - missed}/{val_total}")
+
+    # Print classification report and confusion matrix
+    print("Classification Report:")
+    print(classification_report(all_targets, all_preds))
+    print("Confusion Matrix:")
+    print(confusion_matrix(all_targets, all_preds))
+
+    # Calculate AUC score (if binary classification)
+    auc = roc_auc_score(all_targets, all_probs)
+    print(f"AUC: {auc:.2f}")
+
+    # Calculate average validation loss
+    val_loss /= len(testloader)
+
+    print(f"Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_acc:.4f}")
 
 print(all_accs)
