@@ -79,9 +79,7 @@ foldk = 'fold_3'
 noh_data['image_path'] = noh_data.apply(lambda row: row.image_path.replace('../data','/content/drive/MyDrive/Thyroid_Data/Runs'), axis = 1)
 
 # Show the plot of the image address, the label of the image, and if it is testing or training data
-img_ds = noh_data[['image_path', 'Surgery diagnosis in number', foldk, 'Patient #']]
-img_ds
-
+img_ds = noh_data[['image_path', 'Surgery diagnosis in number', foldk, 'test_split', 'Patient #']]
 
 """# Define testing and training transformers"""
 
@@ -109,7 +107,7 @@ test_transform = v2.Compose([
 
 # Define a batch size for the AI model
 '''Could attempt increasing batch size on my PC'''
-batch_size=16
+batch_size=32
 
 """# Dataset and dataloader"""
 
@@ -172,7 +170,8 @@ class BaggedDataset(torch.utils.data.Dataset):
 
 # This is used for data spliting
 train_df = img_ds[img_ds[foldk]=='train'].reset_index(drop=True)
-test_df = img_ds[img_ds[foldk]=='test'].reset_index(drop=True)
+val_df = img_ds[img_ds[foldk]=='test'].reset_index(drop=True)
+test_df = img_ds[img_ds['test_split']=='test'].reset_index(drop=True)
 
 """# Define test and train loaders"""
 
@@ -185,6 +184,12 @@ train_dataset = BaggedDataset(dataframe=train_df, base_path=base_path, transform
 # Create the DataLoader
 trainloader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=True)
 
+# Create the dataset, passing the base path to it
+val_dataset = NOHThyroidDataset(dataframe=val_df, base_path=base_path, transform=test_transform)
+
+# Create the DataLoader
+valloader = torch.utils.data.DataLoader(val_dataset, batch_size=16, shuffle=True)
+
 # Define the base path to the folder containing the images on Google Drive
 base_path = ""
 
@@ -192,7 +197,7 @@ base_path = ""
 test_dataset = NOHThyroidDataset(dataframe=test_df, base_path=base_path, transform=test_transform)
 
 # Create the DataLoader
-testloader = torch.utils.data.DataLoader(test_dataset, batch_size=32, shuffle=True)
+testloader = torch.utils.data.DataLoader(test_dataset, batch_size=16, shuffle=True)
 
 # Set the standard stats
 norm_stats = ((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
@@ -238,9 +243,6 @@ class AttentionPooling(nn.Module):
 
         return pooled_features  # Return the pooled bag-level feature representation
 
-# Load the pretrained weights onto the model
-# feature_extractor = FeatureExtractor()
-
 # ----------------------------------------------
 from torchvision import models
 efficientnet = models.efficientnet_b0(weights='IMAGENET1K_V1')
@@ -263,17 +265,20 @@ feature_extractor.eval()
 attention_pooling = AttentionPooling(feature_dim=128)
 
 # Set the number of epochs and the best accuracy
-num_epochs = 25
+num_epochs = 500
 best_val_acc = 0.0
 all_accs = []
 
 '''This is where we can make alot of changes to test and see what works better'''
 # This is to define our standard loss function
-criterion = torch.nn.BCEWithLogitsLoss()
+cancer_cases = 300
+non_cancer_cases = 90
+pos_weight = torch.tensor([non_cancer_cases / cancer_cases]).to(device)
+criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 # Set up our learning rate with Adam
-optimizer = optim.Adam(classifier.parameters(), lr=1e-4, weight_decay=1e-4) #weight_decay=1e-4
+optimizer = optim.Adam(classifier.parameters(), lr=1e-3, weight_decay=1e-4) #weight_decay=1e-4
 # Define some of our other factors, such as stoppage, patience, and verbose for the model
-scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.3, patience=3)
+scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.3, patience=3) #factor=0.3, patience=3
 
 # This functions is used to evaluate and display the proformance of our classification model
 def report_clf(preds_ts, outs_ts):
@@ -372,7 +377,7 @@ def apply_backdoor_adjustment(bag_features, confounder_centroids, alpha=0.1):
 
 """Grab the confounders for data alteration"""
 # The number of confounders
-num_clusters = 8
+num_clusters = 9
 
 all_bag_features = []
 print('Loading the confounders...')
@@ -399,6 +404,7 @@ for epoch in range(num_epochs):
     classifier.train()
     train_loss, train_acc = 0.0, 0.0
 
+    print(f"Training for epoch {epoch}...")
     for batch_idx, (data, target) in enumerate(tqdm(trainloader)):
         data = torch.stack([image for image in data]).squeeze(1)  # Prepare input
         data, target = data.to(device), target.to(device)
@@ -447,7 +453,7 @@ for epoch in range(num_epochs):
     
     print(f"Testing for epoch {epoch}...")
     with torch.no_grad():  # Disable gradient computation for validation
-        for batch_idx, (data, target) in enumerate(tqdm(testloader)):
+        for batch_idx, (data, target) in enumerate(tqdm(valloader)):
             data = torch.stack([image for image in data]).squeeze(1)  # Prepare input
             data, target = data.to(device), target.to(device)
             target = target.float()
@@ -508,5 +514,3 @@ for epoch in range(num_epochs):
     val_loss /= len(testloader)
 
     print(f"Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_acc:.4f}")
-
-print(all_accs)
