@@ -9,3 +9,4 @@
 
 # Allow a specific file in the directory
 !folder/multi_instance_thyroid.py
+!folder/LR_Super_Model.ipynb
