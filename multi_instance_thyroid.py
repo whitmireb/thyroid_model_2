@@ -21,6 +21,10 @@ import matplotlib.pyplot as plt
 # import seaborn as sns
 import torch
 import shutil
+import torch
+import torchvision.models as models
+from captum.attr import Occlusion
+from captum.attr import visualization as viz
 # import helpers
 
 """Add the below path to system path so that python files stored in the path can be imported"""
@@ -276,7 +280,7 @@ non_cancer_cases = 90
 pos_weight = torch.tensor([non_cancer_cases / cancer_cases]).to(device)
 criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 # Set up our learning rate with Adam
-optimizer = optim.Adam(classifier.parameters(), lr=1e-3, weight_decay=1e-4) #weight_decay=1e-4
+optimizer = optim.Adam(classifier.parameters(), lr=1e-4, weight_decay=1e-4) #weight_decay=1e-4
 # Define some of our other factors, such as stoppage, patience, and verbose for the model
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.3, patience=3) #factor=0.3, patience=3
 
@@ -375,9 +379,31 @@ def apply_backdoor_adjustment(bag_features, confounder_centroids, alpha=0.1):
 #     print('Epoch: {} \tTrain Loss: {:.4f} \tTrain Acc: {:.4f} \tVal Loss: {:.4f} \tVal Acc: {:.4f}'.format(
 #         epoch, train_loss, train_acc, val_loss, val_acc))
 
+# HEAT MAP TIME BABY!!!
+
+
+
+occlusion = Occlusion(model)
+
+attributions_occ = occlusion.attribute(input_img,
+                                       target=pred_label_idx,
+                                       strides=(3, 8, 8),
+                                       sliding_window_shapes=(3,15, 15),
+                                       baselines=0)
+
+_ = viz.visualize_image_attr_multiple(np.transpose(attributions_occ.squeeze().cpu().detach().numpy(), (1,2,0)),
+                                      np.transpose(transformed_img.squeeze().cpu().detach().numpy(), (1,2,0)),
+                                      ["original_image", "heat_map", "heat_map", "masked_image"],
+                                      ["all", "positive", "negative", "positive"],
+                                      show_colorbar=True,
+                                      titles=["Original", "Positive Attribution", "Negative Attribution", "Masked"],
+                                      fig_size=(18, 6)
+                                     )
+
+
 """Grab the confounders for data alteration"""
 # The number of confounders
-num_clusters = 9
+num_clusters = 10
 
 all_bag_features = []
 print('Loading the confounders...')
