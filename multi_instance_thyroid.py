@@ -174,8 +174,8 @@ class BaggedDataset(torch.utils.data.Dataset):
 
 # This is used for data spliting
 train_df = img_ds[img_ds[foldk]=='train'].reset_index(drop=True)
-val_df = img_ds[img_ds[foldk]=='test'].reset_index(drop=True)
-test_df = img_ds[img_ds['test_split']=='test'].reset_index(drop=True)
+test_df = img_ds[img_ds[foldk]=='test'].reset_index(drop=True)
+# test_df = img_ds[img_ds['test_split']=='test'].reset_index(drop=True)
 
 """# Define test and train loaders"""
 
@@ -189,10 +189,10 @@ train_dataset = BaggedDataset(dataframe=train_df, base_path=base_path, transform
 trainloader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=True)
 
 # Create the dataset, passing the base path to it
-val_dataset = NOHThyroidDataset(dataframe=val_df, base_path=base_path, transform=test_transform)
+# val_dataset = NOHThyroidDataset(dataframe=val_df, base_path=base_path, transform=test_transform)
 
 # Create the DataLoader
-valloader = torch.utils.data.DataLoader(val_dataset, batch_size=16, shuffle=True)
+# valloader = torch.utils.data.DataLoader(val_dataset, batch_size=16, shuffle=True)
 
 # Define the base path to the folder containing the images on Google Drive
 base_path = ""
@@ -379,27 +379,7 @@ def apply_backdoor_adjustment(bag_features, confounder_centroids, alpha=0.1):
 #     print('Epoch: {} \tTrain Loss: {:.4f} \tTrain Acc: {:.4f} \tVal Loss: {:.4f} \tVal Acc: {:.4f}'.format(
 #         epoch, train_loss, train_acc, val_loss, val_acc))
 
-# HEAT MAP TIME BABY!!!
-
-
-
-occlusion = Occlusion(model)
-
-attributions_occ = occlusion.attribute(input_img,
-                                       target=pred_label_idx,
-                                       strides=(3, 8, 8),
-                                       sliding_window_shapes=(3,15, 15),
-                                       baselines=0)
-
-_ = viz.visualize_image_attr_multiple(np.transpose(attributions_occ.squeeze().cpu().detach().numpy(), (1,2,0)),
-                                      np.transpose(transformed_img.squeeze().cpu().detach().numpy(), (1,2,0)),
-                                      ["original_image", "heat_map", "heat_map", "masked_image"],
-                                      ["all", "positive", "negative", "positive"],
-                                      show_colorbar=True,
-                                      titles=["Original", "Positive Attribution", "Negative Attribution", "Masked"],
-                                      fig_size=(18, 6)
-                                     )
-
+best_val_acc = 0.0
 
 """Grab the confounders for data alteration"""
 # The number of confounders
@@ -479,7 +459,7 @@ for epoch in range(num_epochs):
     
     print(f"Testing for epoch {epoch}...")
     with torch.no_grad():  # Disable gradient computation for validation
-        for batch_idx, (data, target) in enumerate(tqdm(valloader)):
+        for batch_idx, (data, target) in enumerate(tqdm(testloader)):
             data = torch.stack([image for image in data]).squeeze(1)  # Prepare input
             data, target = data.to(device), target.to(device)
             target = target.float()
@@ -514,6 +494,15 @@ for epoch in range(num_epochs):
     
    # Calculate overall validation accuracy
     val_acc = val_correct / val_total
+
+    if val_acc > best_val_acc:
+        best_val_acc = val_acc
+        save_feature_extractor_path = f"feature_extractor_epoch_{epoch+1}.pt"
+        torch.save(feature_extractor.state_dict(), save_feature_extractor_path)
+        print(f"feature_extractor saved to {save_feature_extractor_path}")
+        save_classifier_path = f"classifier_epoch_{epoch+1}.pt"
+        torch.save(classifier.state_dict(), save_classifier_path)
+        print(f"classifier saved to {save_classifier_path}")
 
     # Convert predictions and targets to numpy arrays for sklearn metrics
     all_preds = np.concatenate(all_preds, axis=0)
